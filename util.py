@@ -21,8 +21,9 @@ def computOmega(img, window_param):
         for j in np.arange(window_param, img.shape[1]+window_param):
             temp_img = padded[i:i+window_param*2+1, j:j+window_param*2+1]
             st = np.std(temp_img)
-            if st < 5:
+            if st < 5/255.:
                 res[i-window_param][j-window_param] = 1
+    return res
     # res = np.zeros(
     #     shape=(img.shape[0]-window_param * 2, img.shape[1]-window_param*2))
     # for i in np.arange(window_param, img.shape[0]-window_param):
@@ -32,16 +33,12 @@ def computOmega(img, window_param):
     #         if st < 5:
     #             res[i-window_param][j-window_param] = 1
 
-    print(img.shape)
-    print(padded.shape)
-    print(res.shape)
-
-    cv2.imshow("original", img)
-    cv2.imshow("omega", res)
-    cv2.imshow("pad", padded)
-    cv2.imshow("plus", img+res)
-    cv2.waitKey()
-    cv2.destroyAllWindows()
+    # cv2.imshow("original", img)
+    # cv2.imshow("omega", res)
+    # cv2.imshow("pad", padded)
+    # cv2.imshow("plus", img+res)
+    # cv2.waitKey()
+    # cv2.destroyAllWindows()
     # print(temp_img.shape)
     # plt.figure(figsize=(10, 5))
     # plt.subplot(121), plt.imshow(img, cmap='gray')
@@ -51,20 +48,25 @@ def computOmega(img, window_param):
     # plt.show()
 
 
-def computeLocalPrior(latent, img, sigma):
-    window_param = 5
-    omega = computOmega(img, window_param)
+def computeLocalPrior(latent, img, omega, sigma=1):
     ret = 1
 
-    for i in range(len(latent)):
-        for j in range((len(latent[i]))):
+    print("Original Image: ", img.shape)
+    print("Latent Image", img.shape)
+    print("Omega Size: ", omega.shape)
+    gaus = scipy.stats.norm(0, sigma)
+
+    for i in range(len(latent)-1):
+        for j in range(len(latent[i])-1):
             if omega[i][j] == 1:
                 grad_x = (latent[i+1][j] - latent[i][j]) - \
                     (img[i+1][j] - img[i][j])
                 grad_y = (latent[i][j+1] - latent[i][j]) - \
                     (img[i][j+1] - img[i][j])
-                gaus_x = scipy.stats.norm(0, sigma).cdf(grad_x)
-                gaus_y = scipy.stats.norm(0, sigma).cdf(grad_y)
+                gaus_x = gaus.cdf(grad_x)
+                gaus_y = gaus.cdf(grad_y)
                 ret *= gaus_x * gaus_y
+                if gaus_x == 0 or gaus_y == 0:
+                    print((i, j))
 
     return ret
