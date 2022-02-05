@@ -5,17 +5,70 @@ import scipy.stats
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.optimize import minimize_scalar as mins
 
-LAMBDA1 = 1
-LAMBDA2 = 1
-GAMMA = 1
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.autograd import Variable
+
+LAMBDA1 = 0.1
+LAMBDA2 = 15
+GAMMA = 8
+
+
+class psiModel(nn.Module):
+    """Custom Pytorch model for gradient optimization.
+    """
+
+    def __init__(self, psi):
+        super().__init__()
+        # initialize weights with random numbers
+        # weights = torch.distributions.Uniform(0, 0.1).sample((3,))
+        weights = psi
+        # make weights torch parameters
+        self.weights = nn.Parameter(weights)
+
+    def forward(self, X):
+        """Implement function to be optimised. In this case, an exponential decay
+        function (a + exp(-k * X) + b),
+        """
+        psi = self.weights
+
+        return 0
+
+
+def training_loop(model, optimizer, n=1000):
+    "Training loop for torch model."
+    losses = []
+    for i in range(n):
+        preds = model(x)
+        loss = F.mse_loss(preds, y).sqrt()
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+        losses.append(loss)
+    return losses
+
+
+def conv2dn(a, f):
+    s = f.shape + tuple(np.subtract(a.shape, f.shape) + 1)
+    strd = np.lib.stride_tricks.as_strided
+    subM = strd(a, shape=s, strides=a.strides * 2)
+    return np.einsum('ij,ijkl->kl', f, subM)
+
+
+def conv2dt(a, f):
+    ret = F.conv2d(Variable(a.view(1, 1, a.shape[0], a.shape[1])),
+                   Variable(f.view(1, 1, f.shape[0], f.shape[1])))
+    ret.squeeze_()
+    return ret
 
 
 def padding(img, window_param):
-    temp = cv2.copyMakeBorder(img, window_param, window_param,
-                              window_param, window_param, cv2.BORDER_REFLECT)
-
-    return temp
+    ret = cv2.copyMakeBorder(
+        img, window_param, window_param, window_param, window_param, cv2.BORDER_REFLECT)
+    return ret
 
 
 def computOmega(img, window_param):
@@ -76,53 +129,90 @@ def computeLocalPrior(latent, img, omega, sigma=1):
     return arr
 
 
-def psi_x(img, latent, ome, psi):
+def psi_x(psi, a):
     energy = LAMBDA1 * abs(eq(psi))
-    energy += LAMBDA2 * ome * ((psi - (img[0] - img[1]))**2)
-    energy += GAMMA * ((psi - latent[0] - latent[1])**2)
-
-    # find optimizing psi value
+    energy += LAMBDA2 * a[2] * ((psi - a[0])**2)
+    energy += GAMMA * ((psi - a[1])**2)
     return energy
 
 
-def psi_y(img, latent, ome, psi):
+def psi_y(psi, a):
     energy = LAMBDA1 * abs(eq(psi))
-    energy += LAMBDA2 * ome * ((psi - (img[0] - img[1]))**2)
-    energy += GAMMA * ((psi - latent[0] - latent[1])**2)
-
-    # find optimizing psi value
+    energy += LAMBDA2 * a[2] * ((psi - a[0])**2)
+    energy += GAMMA * ((psi - a[1])**2)
     return energy
 
 
-def computePsi(img, latent, psi, omega):
-    # latent.shape = img.shape
-    # omega.shape = img.shape
-    # psi.shape = ((img.shape), 2) for x, y
-
+def computePsi(img, latent, omega):
     energy = 0
-    temp = np.zeros(shape=img.shape)
-    for i in range(len(img)-1):
-        for j in range(len(img[i])-1):
-            temp[i][j] = psi_x((img[i+1][j], img[i][j]), (latent[i+1][j],
-                                                          latent[i][j]), omega[i][j], psi[i][j][0])
-            temp[i][j] = psi_y((img[i][j+1], img[i][j]), (latent[i][j+1],
-                                                          latent[i][j]), omega[i][j], psi[i][j][1])
+
+    pad_img = padding(img, 1)
+    pad_lat = padding(latent, 1)
+    temp = np.zeros(shape=(2, img.shape[0], img.shape[1]))
+
+    img_x = conv2dn(pad_img, np.array([[1, 0, -1], [2, 0, -2], [1, 0, -1]]))
+    img_y = conv2dn(pad_img, np.array([[1, 2, 1], [0, 0, 0], [-1, -2, -1]]))
+    lat_x = conv2dn(pad_lat, np.array([[1, 0, -1], [2, 0, -2], [1, 0, -1]]))
+    lat_y = conv2dn(pad_lat, np.array([[1, 2, 1], [0, 0, 0], [-1, -2, -1]]))
+
+    for i in range(len(img)):
+        for j in range(len(img[i])):
+            res_x = mins(psi_x, None, None, [
+                         img_x[i][j], lat_x[i][j], omega[i][j]])
+            temp[0][i][j] = res_x.x
+
+            res_y = mins(psi_y, None, None, [
+                         img_y[i][j], lat_y[i][j], omega[i][j]])
+            temp[1][i][j] = res_y.x
     return temp
 
 
-def computeLatent(img, latent, psi, omega, psf):
-    fpsf = np.conjugate(np.fft.fft2(psf))
+def trii():
+    x = np.array([[1, 0, -1], [2, 0, -2], [1, 0, -1]])
+    y = np.array([[1, 2, 1], [0, 0, 0], [-1, -2, -1]])
+    la = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]])
+    fx = np.fft.fft2(x)
+    fy = np.fft.fft2(y)
+    fla = np.fft.fft2(la)
+    xx = (50/(2**1)) * (np.multiply(np.conjugate(fx), fx))
+    yy = (50/(2**1)) * (np.multiply(np.conjugate(fy), fy))
+    ll = (50/(2**2)) * (np.multiply(np.conjugate(fla), fla))
+    return xx + yy + ll + ll + ll + ll
+
+
+def computeLatent(img, psi, psf):
+    tri = trii()
+    fsx = np.fft.fft2(np.array([[1, 0, -1], [2, 0, -2], [1, 0, -1]]))
+    fsy = np.fft.fft2(np.array([[1, 2, 1], [0, 0, 0], [-1, -2, -1]]))
+
+    fpsf = np.fft.fft2(psf)
+    cfpsf = np.conjugate(fpsf)
     fimg = np.fft.fft2(img)
-    ret = np.multiply(fpsf, fimg)
-    ret += GAMMA
+
+    son = np.multiply(cfpsf, fimg)
+    son = np.multiply(son, tri)
+
+    fpsix = np.fft.fft2(psi[0])
+    fpsiy = np.fft.fft2(psi[1])
+    son += GAMMA * np.multiply(np.conjugate(fsx), fpsix)
+    son += GAMMA * np.multiply(np.conjugate(fsy), fpsiy)
+
+    down = np.multiply(cfpsf, fpsf)
+    down = np.multiply(down, tri)
+
+    down += GAMMA * np.multiply(np.conjugate(fsx), fsx)
+    down += GAMMA * np.multiply(np.conjugate(fsy), fsy)
+
+    ret = np.divide(son, down)
+    ret = np.fft.ifft2(ret)
 
     return ret
 
 
 def optimizeL(img, latent, omega, psi, psf):
     for i in range(15):
-        psi = computePsi(img, latent, psi, omega)
-        latent = computeLatent(img, latent, psi, omega, psf)
+        psi = computePsi(img, latent, omega)
+        latent = computeLatent(img, psi, psf)
     return latent
 
 
@@ -134,7 +224,7 @@ def optimizeF(img, latent, omega, psi, psf):
 
 
 def eq(x):
-    if x > BOUND:
+    if abs(x) > 10:
         return -(6.1e-4 * (x**2) + 5.0)
     else:
         return -2.7 * abs(x)
