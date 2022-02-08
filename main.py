@@ -23,12 +23,13 @@ def main():
 
     # omega = computOmega(img, WINDOW_PARAM)
 
-    psi_xx = np.genfromtxt('sample00.csv', delimiter=',')
-    psi_yy = np.genfromtxt('sample01.csv', delimiter=',')
+    # psi_xx = np.genfromtxt('sample00.csv', delimiter=',')
+    # psi_yy = np.genfromtxt('sample01.csv', delimiter=',')
 
     cur = time.time()
-    latent = computeLatent(img, (psi_xx, psi_yy),
-                           np.random.randn(img.shape[0], img.shape[1]))
+    temp = np.random.uniform(low=0, high=0.5, size=(49, 49))
+    temp[24][24] = 1
+    optimizeF(img, latent, psf=temp)
 
     lapsed = (time.time() - cur)
     print(lapsed)
