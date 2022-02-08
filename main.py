@@ -4,6 +4,7 @@ from scipy.ndimage import convolve
 import scipy.stats
 import numpy as np
 import matplotlib.pyplot as plt
+from update import *
 from util import *
 import csv
 import time
@@ -21,15 +22,13 @@ def main():
     latent = cv2.imread("dataset/picassoBlurImage.png",
                         cv2.IMREAD_GRAYSCALE) / 255.
 
-    # omega = computOmega(img, WINDOW_PARAM)
-
-    # psi_xx = np.genfromtxt('sample00.csv', delimiter=',')
-    # psi_yy = np.genfromtxt('sample01.csv', delimiter=',')
+    omega = computOmega(img, WINDOW_PARAM)
 
     cur = time.time()
-    temp = np.random.uniform(low=0, high=0.5, size=(49, 49))
-    temp[24][24] = 1
-    optimizeF(img, latent, psf=temp)
+    temp = np.random.uniform(low=0, high=0.5, size=(11, 11))
+    temp[5][5] = 1
+
+    deblurImage(img, latent, omega)
 
     lapsed = (time.time() - cur)
     print(lapsed)
