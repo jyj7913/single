@@ -19,6 +19,214 @@ LAMBDA2 = 15
 GAMMA = 8
 
 
+class psfModel(nn.Module):
+    def __init__(self, psf, img, latent):
+        super().__init__()
+        weights = psf
+
+        pad_img = padding(img, 1)
+        pad_lat = padding(latent, 1)
+        sx = np.array([[1, 0, -1], [2, 0, -2], [1, 0, -1]])
+        sy = np.array([[1, 2, 1], [0, 0, 0], [-1, -2, -1]])
+
+        img_x = conv2dn(pad_img, sx)
+        img_y = conv2dn(pad_img, sy)
+        pad_img_x = padding(img_x, 1)
+        pad_img_y = padding(img_y, 1)
+        img_xx = conv2dn(pad_img_x, sx)
+        img_xy = conv2dn(pad_img_x, sy)
+        img_yy = conv2dn(pad_img_y, sy)
+        self.img_grad = [torch.Tensor(img), torch.Tensor(img_x), torch.Tensor(
+            img_y), torch.Tensor(img_xx), torch.Tensor(img_xy), torch.Tensor(img_yy)]
+
+        lat_x = conv2dn(pad_lat, sx)
+        lat_y = conv2dn(pad_lat, sy)
+        pad_lat_x = padding(lat_x, 1)
+        pad_lat_y = padding(lat_y, 1)
+        lat_xx = conv2dn(pad_lat_x, sx)
+        lat_xy = conv2dn(pad_lat_x, sy)
+        lat_yy = conv2dn(pad_lat_y, sy)
+        self.lat_grad = [torch.Tensor(padding(latent, psf.shape[0]//2)), torch.Tensor(padding(lat_x, psf.shape[0]//2)), torch.Tensor(padding(lat_y, psf.shape[0]//2)),
+                         torch.Tensor(padding(lat_xx, psf.shape[0]//2)), torch.Tensor(padding(lat_xy, psf.shape[0]//2)), torch.Tensor(padding(lat_yy, psf.shape[0]//2))]
+
+        self.w = [0, 1, 1, 2, 2, 2]
+
+        self.weights = nn.Parameter(torch.Tensor(weights), requires_grad=True)
+
+    def forward(self):
+        psf = self.weights
+        sum = 0
+        for i in range(5):
+            temp = conv2dt(self.lat_grad[i], psf) - self.img_grad[i]
+            temp = torch.norm(temp).item() ** 2
+            temp *= 50 / (2 ** self.w[i])
+            sum += temp
+        sum += torch.norm(psf, p=1).item()
+
+        return sum
+
+
+def training_loop(model, optimizer, n=100):
+    loss_fn = nn.MSELoss()
+    for param in model.parameters():
+        param.requires_grad_(True)
+
+    for i in range(n):
+        preds = model()
+        loss = loss_fn(torch.Tensor([preds]), torch.Tensor([0]))
+        loss.requires_grad_(True)
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+    loss.requires_grad_(False)
+
+    for param in model.parameters():
+        param.requires_grad_(False)
+        return param.data
+
+
+class psiModel(nn.Module):
+    def __init__(self, psi, img, latent, omega):
+        super().__init__()
+        weight_x = psi[0]
+        weight_y = psi[1]
+        pad_img = padding(img, 1)
+        pad_lat = padding(latent, 1)
+        self.img = torch.Tensor(pad_img)
+        self.latent = torch.Tensor(pad_lat)
+        self.omega = torch.Tensor(omega)
+        self.sx = torch.Tensor([[1, 0, -1], [2, 0, -2], [1, 0, -1]])
+        self.sy = torch.Tensor([[1, 2, 1], [0, 0, 0], [-1, -2, -1]])
+
+        eq_x = torch.zeros(size=img.shape)
+        eq_y = torch.zeros(size=img.shape)
+
+        for i in range(len(eq_x)):
+            for j in range(len(eq_x[i])):
+                eq_x[i][j] = eq(weight_x[i][j])
+                eq_y[i][j] = eq(weight_y[i][j])
+
+        self.eq_x = eq_x
+        self.eq_y = eq_y
+
+        self.weight_x = nn.Parameter(
+            torch.Tensor(weight_x), requires_grad=True)
+        self.weight_y = nn.Parameter(
+            torch.Tensor(weight_y), requires_grad=True)
+
+    def forward(self):
+        psi_x = self.weight_x
+        psi_y = self.weight_y
+        lam1x = self.eq_x
+        lam1x = torch.norm(lam1x, p=1)
+        lam1y = self.eq_y
+        lam1y = torch.norm(lam1y, p=1)
+
+        lam2x = psi_x - conv2dt(self.img, self.sx)
+        lam2x = torch.mul(lam2x, self.omega)
+        lam2x = LAMBDA2 * torch.norm(lam2x).item() ** 2
+
+        lam2y = psi_y - conv2dt(self.img, self.sy)
+        lam2y = torch.mul(lam2y, self.omega)
+        lam2y = LAMBDA2 * torch.norm(lam2y).item() ** 2
+
+        gamx = psi_x - conv2dt(self.latent, self.sx)
+        gamx = GAMMA * torch.norm(gamx).item() ** 2
+
+        gamy = psi_y - conv2dt(self.latent, self.sy)
+        gamy = GAMMA * torch.norm(gamy).item() ** 2
+
+        ret = lam1x + lam1y + lam2x + lam2y + gamx + gamy
+
+        return ret
+
+
+class psiModel2(nn.Module):
+    def __init__(self, psi, img, latent, omega):
+        super().__init__()
+        weight_x = psi[0]
+        weight_y = psi[1]
+        pad_img = padding(img, 1)
+        pad_lat = padding(latent, 1)
+        self.img = torch.Tensor(pad_img)
+        self.latent = torch.Tensor(pad_lat)
+        self.omega = torch.Tensor(omega)
+        self.sx = torch.Tensor([[1, 0, -1], [2, 0, -2], [1, 0, -1]])
+        self.sy = torch.Tensor([[1, 2, 1], [0, 0, 0], [-1, -2, -1]])
+
+        eq_x = torch.zeros(size=img.shape)
+        eq_y = torch.zeros(size=img.shape)
+
+        for i in range(len(eq_x)):
+            for j in range(len(eq_x[i])):
+                eq_x[i][j] = eq(weight_x[i][j])
+                eq_y[i][j] = eq(weight_y[i][j])
+
+        self.eq_x = eq_x
+        self.eq_y = eq_y
+
+        self.conv1 = nn.Conv2d(1, 1, img.shape)
+        self.conv2 = nn.Conv2d(1, 1, img.shape)
+
+        with torch.no_grad():
+            self.conv1.weight = nn.Parameter(torch.unsqueeze(
+                torch.unsqueeze(torch.Tensor(weight_x), 0), 0), requires_grad=True)
+            self.conv2.weight = nn.Parameter(torch.unsqueeze(
+                torch.unsqueeze(torch.Tensor(weight_y), 0), 0), requires_grad=True)
+
+            # self.conv1.weight.data = self.conv1.weight.data + \
+            #     torch.Tensor(weight_x)
+            # self.conv2.weight.data = self.conv2.weight.data + \
+            #     torch.Tensor(weight_y)
+
+    def forward(self):
+        psi_x = torch.squeeze(self.conv1.weight.data)
+        psi_y = torch.squeeze(self.conv2.weight.data)
+        lam1x = self.eq_x
+        lam1x = torch.norm(lam1x, p=1)
+        lam1y = self.eq_y
+        lam1y = torch.norm(lam1y, p=1)
+
+        lam2x = psi_x - conv2dt(self.img, self.sx)
+        lam2x = torch.mul(lam2x, self.omega)
+        lam2x = LAMBDA2 * torch.norm(lam2x).item() ** 2
+
+        lam2y = psi_y - conv2dt(self.img, self.sy)
+        lam2y = torch.mul(lam2y, self.omega)
+        lam2y = LAMBDA2 * torch.norm(lam2y).item() ** 2
+
+        gamx = psi_x - conv2dt(self.latent, self.sx)
+        gamx = GAMMA * torch.norm(gamx).item() ** 2
+
+        gamy = psi_y - conv2dt(self.latent, self.sy)
+        gamy = GAMMA * torch.norm(gamy).item() ** 2
+
+        ret = lam1x + lam1y + lam2x + lam2y + gamx + gamy
+
+        return ret
+
+
+def training_loop_psi(model, optimizer, n=15):
+    loss_fn = nn.MSELoss()
+    for param in model.parameters():
+        param.requires_grad_(True)
+
+    for i in range(n):
+        preds = model()
+        loss = loss_fn(torch.Tensor([preds]), torch.Tensor([0]))
+        loss.requires_grad_(True)
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+    loss.requires_grad_(False)
+    ret = []
+    for i, param in enumerate(model.parameters()):
+        param.requires_grad_(False)
+        if i % 2 == 0:
+            ret.append(torch.squeeze(param.data).cpu().detach().numpy())
+    return ret
+
+
 def psf2otf(flt, img_shape):
     flt_top_half = flt.shape[0]//2
     flt_bottom_half = flt.shape[0] - flt_top_half
@@ -102,7 +310,7 @@ def trii(img_shape):
 
 
 def eq(x):
-    if abs(x) > 10:
+    if abs(x) > 1.885:
         return -(6.1e-4 * (x**2) + 5.0)
     else:
         return -2.7 * abs(x)
